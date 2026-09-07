@@ -9,38 +9,28 @@ permissions:
   contents: read
 
 jobs:
-  authorize:
+  validate:
     runs-on: ubuntu-latest
-    environment: release
     permissions:
-      actions: read
       contents: read
     outputs:
-      tag: ${{ steps.authorize.outputs.tag }}
-      sha: ${{ steps.authorize.outputs.sha }}
-      publication_repository: ${{ steps.authorize.outputs.publication_repository }}
-      publication_owner: ${{ steps.authorize.outputs.publication_owner }}
-      publication_name: ${{ steps.authorize.outputs.publication_name }}
+      tag: ${{ steps.validate.outputs.tag }}
+      sha: ${{ steps.validate.outputs.sha }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
           ref: ${{ github.sha }}
-      - name: Authorize release source and publication target
-        id: authorize
+      - name: Validate release tag and source
+        id: validate
         shell: bash
         env:
-          PUBLICATION_REPOSITORY: ${{ vars.AIDLC_PUBLICATION_REPOSITORY }}
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
           [[ "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
           test "$GITHUB_EVENT_NAME" = "push"
           test "$GITHUB_REF" = "refs/tags/$RELEASE_TAG"
-          if [ -z "$PUBLICATION_REPOSITORY" ]; then
-            echo "::error title=Release repository policy failure::The protected release environment must provide AIDLC_PUBLICATION_REPOSITORY."
-            exit 1
-          fi
           git fetch --force origin \
             "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG" main
           tag_sha="$(git rev-parse "$RELEASE_TAG^{commit}")"
@@ -50,167 +40,15 @@ jobs:
           git merge-base --is-ancestor "$tag_sha" "$main_sha"
           version="$(awk -F'"' '/^export const AIDLC_VERSION = "/ { print $2 }' core/tools/aidlc-version.ts)"
           test "$RELEASE_TAG" = "v$version"
-          [[ "$PUBLICATION_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]
-          test "$PUBLICATION_REPOSITORY" != "$GITHUB_REPOSITORY"
-          publication_owner="${PUBLICATION_REPOSITORY%%/*}"
-          publication_name="${PUBLICATION_REPOSITORY#*/}"
-          test "$publication_owner" = "$GITHUB_REPOSITORY_OWNER"
-          printf 'tag=%s\nsha=%s\npublication_repository=%s\npublication_owner=%s\npublication_name=%s\n' \
-            "$RELEASE_TAG" "$tag_sha" "$PUBLICATION_REPOSITORY" \
-            "$publication_owner" "$publication_name" >> "$GITHUB_OUTPUT"
-      - name: Require protected release authorization identity
-        shell: bash
-        env:
-          RELEASE_AUTH_APP_ID: ${{ vars.AIDLC_RELEASE_AUTH_APP_ID }}
-          RELEASE_AUTH_APP_PRIVATE_KEY: ${{ secrets.AIDLC_RELEASE_AUTH_APP_PRIVATE_KEY }}
-        run: |
-          set -euo pipefail
-          if [ -z "$RELEASE_AUTH_APP_ID" ] || [ -z "$RELEASE_AUTH_APP_PRIVATE_KEY" ]; then
-            echo "::error title=Release authorization identity failure::The protected release environment must provide AIDLC_RELEASE_AUTH_APP_ID and AIDLC_RELEASE_AUTH_APP_PRIVATE_KEY."
-            exit 1
-          fi
-      - name: Mint release authorization token
-        id: release-authorization-token
-        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
-        with:
-          app-id: ${{ vars.AIDLC_RELEASE_AUTH_APP_ID }}
-          private-key: ${{ secrets.AIDLC_RELEASE_AUTH_APP_PRIVATE_KEY }}
-          owner: ${{ steps.authorize.outputs.publication_owner }}
-          repositories: |
-            ${{ github.event.repository.name }}
-            ${{ steps.authorize.outputs.publication_name }}
-          permission-actions: read
-          permission-administration: read
-          permission-members: read
-          permission-metadata: read
-          permission-organization-administration: read
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-        with:
-          bun-version: 1.3.14
-      - name: Verify release repository controls
-        shell: bash
-        env:
-          GH_TOKEN: ${{ steps.release-authorization-token.outputs.token }}
-          PUBLICATION_REPOSITORY: ${{ steps.authorize.outputs.publication_repository }}
-          RELEASE_AUTH_APP_ID: ${{ vars.AIDLC_RELEASE_AUTH_APP_ID }}
-        run: |
-          set -euo pipefail
-          authorization_failure() {
-            echo "::error title=Release authorization identity failure::$1"
-            exit 1
-          }
-          policy_failure() {
-            echo "::error title=Release repository policy failure::$1"
-            exit 1
-          }
-          if ! environment="$(gh api "repos/$GITHUB_REPOSITORY/environments/release")"; then
-            authorization_failure \
-              "The protected GitHub App identity could not read the release environment."
-          fi
-          if ! jq -e '
-            .can_admins_bypass == false and
-            .deployment_branch_policy.protected_branches == false and
-            .deployment_branch_policy.custom_branch_policies == true and
-            (
-              [.protection_rules[] | select(.type == "required_reviewers")]
-              | length
-            ) == 1 and
-            (
-              [.protection_rules[] | select(.type == "required_reviewers")][0]
-              | .prevent_self_review == true and
-                (.reviewers | length) == 1 and
-                .reviewers[0].type == "Team" and
-                .reviewers[0].reviewer.slug == "aidlc-admins"
-            )
-          ' <<<"$environment" >/dev/null; then
-            policy_failure \
-              "The release environment must disable administrator bypass and self-review and require exactly the aidlc-admins team."
-          fi
-          if ! policies="$(
-            gh api --paginate --slurp \
-              "repos/$GITHUB_REPOSITORY/environments/release/deployment-branch-policies"
-          )"; then
-            authorization_failure \
-              "The protected GitHub App identity could not read release deployment policies."
-          fi
-          if ! jq -e '
-            ([.[].branch_policies[]] | length) == 1 and
-            [.[].branch_policies[]][0].name == "v*" and
-            [.[].branch_policies[]][0].type == "tag"
-          ' <<<"$policies" >/dev/null; then
-            policy_failure \
-              "The release environment must allow exactly the v* tag deployment policy and no others."
-          fi
-          if ! immutable="$(
-            gh api "repos/$PUBLICATION_REPOSITORY/immutable-releases"
-          )"; then
-            authorization_failure \
-              "The protected GitHub App identity could not read publication-repository immutable-release settings."
-          fi
-          if ! jq -e '
-            .enabled == true and .enforced_by_owner == true
-          ' <<<"$immutable" >/dev/null; then
-            policy_failure \
-              "Immutable releases must be enabled and enforced by the repository owner."
-          fi
-          rulesets="$RUNNER_TEMP/aidlc-release-rulesets"
-          mkdir -p "$rulesets"
-          if ! ruleset_ids="$(
-            gh api --paginate "repos/$PUBLICATION_REPOSITORY/rulesets" --jq '.[].id'
-          )"; then
-            echo "::error title=Release authorization identity failure::The protected GitHub App identity could not list repository rulesets."
-            exit 1
-          fi
-          while read -r ruleset_id; do
-            test -n "$ruleset_id" || continue
-            if ! gh api "repos/$PUBLICATION_REPOSITORY/rulesets/$ruleset_id" \
-              >"$rulesets/$ruleset_id.json"; then
-              echo "::error title=Release authorization identity failure::The protected GitHub App identity could not read ruleset $ruleset_id."
-              exit 1
-            fi
-          done <<<"$ruleset_ids"
-          collaborators="$RUNNER_TEMP/aidlc-release-collaborators.json"
-          organization_owners="$RUNNER_TEMP/aidlc-release-organization-owners.json"
-          repository="$RUNNER_TEMP/aidlc-release-repository.json"
-          owner="$RUNNER_TEMP/aidlc-release-owner.json"
-          if ! gh api "repos/$PUBLICATION_REPOSITORY" >"$repository"; then
-            authorization_failure \
-              "The protected GitHub App identity could not read the publication repository."
-          fi
-          if ! gh api "orgs/${PUBLICATION_REPOSITORY%%/*}" >"$owner"; then
-            authorization_failure \
-              "The protected GitHub App identity could not read publication-owner policy."
-          fi
-          if ! gh api --paginate --slurp \
-            "repos/$PUBLICATION_REPOSITORY/collaborators?affiliation=all&per_page=100" \
-            >"$collaborators"; then
-            authorization_failure \
-              "The protected GitHub App identity could not enumerate publication-repository collaborators."
-          fi
-          if ! gh api --paginate --slurp \
-            "orgs/${PUBLICATION_REPOSITORY%%/*}/members?role=admin&per_page=100" \
-            >"$organization_owners"; then
-            authorization_failure \
-              "The protected GitHub App identity could not enumerate publication-organization owners."
-          fi
-          bun scripts/verify-release.ts controls \
-            --rulesets "$rulesets" \
-            --repository "$repository" \
-            --owner "$owner" \
-            --collaborators "$collaborators" \
-            --organization-owners "$organization_owners" \
-            --source-repository "$GITHUB_REPOSITORY" \
-            --publication-repository "$PUBLICATION_REPOSITORY" \
-            --creation-actor-id "$RELEASE_AUTH_APP_ID" \
-            --creation-actor-type Integration
+          printf 'tag=%s\nsha=%s\n' "$RELEASE_TAG" "$tag_sha" >> "$GITHUB_OUTPUT"
 
   verify:
-    needs: authorize
+    needs: validate
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ needs.authorize.outputs.sha }}
+          ref: ${{ needs.validate.outputs.sha }}
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: 1.3.14
@@ -225,7 +63,7 @@ jobs:
         run: shellcheck scripts/install.sh
 
   native-smoke:
-    needs: [authorize, verify]
+    needs: [validate, verify]
     strategy:
       fail-fast: false
       matrix:
@@ -234,7 +72,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ needs.authorize.outputs.sha }}
+          ref: ${{ needs.validate.outputs.sha }}
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: 1.3.14
@@ -257,7 +95,7 @@ jobs:
           }
 
   build:
-    needs: [authorize, native-smoke]
+    needs: [validate, native-smoke]
     strategy:
       matrix:
         include:
@@ -286,7 +124,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ needs.authorize.outputs.sha }}
+          ref: ${{ needs.validate.outputs.sha }}
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: 1.3.14
@@ -330,14 +168,14 @@ jobs:
           TARGET_DIR: ${{ matrix.directory }}
 
   stage-release:
-    needs: [authorize, build]
+    needs: [validate, build]
     runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ needs.authorize.outputs.sha }}
+          ref: ${{ needs.validate.outputs.sha }}
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: 1.3.14
@@ -350,7 +188,7 @@ jobs:
       - run: bun scripts/package.ts
       - run: bun scripts/package-release.ts --require-release-matrix
         env:
-          AIDLC_RELEASE_SOURCE_DIGEST: ${{ needs.authorize.outputs.sha }}
+          AIDLC_RELEASE_SOURCE_DIGEST: ${{ needs.validate.outputs.sha }}
       - name: Re-verify staged release checksums
         working-directory: build/release
         run: sha256sum -c checksums.txt
@@ -605,9 +443,8 @@ jobs:
           done
 
   publish:
-    needs: [authorize, musl-smoke, windows-lifecycle, unix-lifecycle]
+    needs: [validate, musl-smoke, windows-lifecycle, unix-lifecycle]
     runs-on: ubuntu-latest
-    environment: release
     permissions:
       contents: read
       id-token: write
@@ -616,14 +453,14 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 1
-          ref: ${{ needs.authorize.outputs.sha }}
+          ref: ${{ needs.validate.outputs.sha }}
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: 1.3.14
       - name: Recheck release source
         env:
-          AUTHORIZED_SHA: ${{ needs.authorize.outputs.sha }}
-          RELEASE_TAG: ${{ needs.authorize.outputs.tag }}
+          AUTHORIZED_SHA: ${{ needs.validate.outputs.sha }}
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
         run: |
           git fetch --force origin \
             "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
@@ -635,7 +472,7 @@ jobs:
           path: build/release
       - run: test "$RELEASE_TAG" = "v$(jq -r .version build/release/version.json)"
         env:
-          RELEASE_TAG: ${{ needs.authorize.outputs.tag }}
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
       - name: Re-verify staged release checksums
         working-directory: build/release
         run: sha256sum -c checksums.txt
@@ -657,339 +494,58 @@ jobs:
             --tag "$RELEASE_TAG" \
             --source-digest "$AUTHORIZED_SHA"
         env:
-          AUTHORIZED_SHA: ${{ needs.authorize.outputs.sha }}
-          RELEASE_TAG: ${{ needs.authorize.outputs.tag }}
+          AUTHORIZED_SHA: ${{ needs.validate.outputs.sha }}
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: attested-release
           path: build/release
           if-no-files-found: error
 
-  promote:
-    needs: [authorize, publish]
+  release:
+    needs: [validate, publish]
     runs-on: ubuntu-latest
     environment: release
     permissions:
-      contents: read
+      contents: write
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          fetch-depth: 1
-          ref: ${{ needs.authorize.outputs.sha }}
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-        with:
-          bun-version: 1.3.14
-      - name: Recheck release source
-        env:
-          AUTHORIZED_SHA: ${{ needs.authorize.outputs.sha }}
-          RELEASE_TAG: ${{ needs.authorize.outputs.tag }}
-        run: |
-          git fetch --force origin \
-            "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
-          test "$(git rev-parse "$RELEASE_TAG^{commit}")" = "$AUTHORIZED_SHA"
-          test "$(git rev-parse HEAD)" = "$AUTHORIZED_SHA"
+          fetch-depth: 0
+          ref: ${{ needs.validate.outputs.sha }}
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: attested-release
           path: build/release
-      - name: Authenticate and verify immutable release bytes
-        shell: bash
+      - name: Recheck release source
+        env:
+          AUTHORIZED_SHA: ${{ needs.validate.outputs.sha }}
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git fetch --force origin "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
+          test "$(git rev-parse "$RELEASE_TAG^{commit}")" = "$AUTHORIZED_SHA"
+          test "$(git rev-parse HEAD)" = "$AUTHORIZED_SHA"
+          test "$RELEASE_TAG" = "v$(jq -r .version build/release/version.json)"
+          (cd build/release && sha256sum -c checksums.txt)
+      - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          AUTHORIZED_SHA: ${{ needs.authorize.outputs.sha }}
-          RELEASE_TAG: ${{ needs.authorize.outputs.tag }}
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
         run: |
           set -euo pipefail
-          release="$PWD/build/release"
-          checksums="$release/checksums.txt"
-          bundle="$release/aidlc-release.intoto.jsonl"
-          signer_workflow="$GH_REPO/.github/workflows/release.yml"
-          source_ref="refs/tags/$RELEASE_TAG"
-          test -f "$checksums"
-          test -f "$bundle"
-
-          # Authenticate checksums.txt before it can select or validate any
-          # other release byte.
-          gh attestation verify "$checksums" \
-            --repo "$GH_REPO" \
-            --signer-workflow "$signer_workflow" \
-            --source-ref "$source_ref" \
-            --source-digest "$AUTHORIZED_SHA"
-          gh attestation verify "$checksums" \
-            --bundle "$bundle" \
-            --repo "$GH_REPO" \
-            --signer-workflow "$signer_workflow" \
-            --source-ref "$source_ref" \
-            --source-digest "$AUTHORIZED_SHA"
-
-          mapfile -t attested_assets < <(
-            bun scripts/verify-release.ts candidate \
-              --directory "$release" \
-              --tag "$RELEASE_TAG" \
-              --source-digest "$AUTHORIZED_SHA" \
-              --list-assets
-          )
-          test "${#attested_assets[@]}" -eq 10
-          for asset_name in "${attested_assets[@]}"; do
-            asset="$release/$asset_name"
-            gh attestation verify "$asset" \
-              --repo "$GH_REPO" \
-              --signer-workflow "$signer_workflow" \
-              --source-ref "$source_ref" \
-              --source-digest "$AUTHORIZED_SHA"
-            gh attestation verify "$asset" \
-              --bundle "$bundle" \
-              --repo "$GH_REPO" \
-              --signer-workflow "$signer_workflow" \
-              --source-ref "$source_ref" \
-              --source-digest "$AUTHORIZED_SHA"
-          done
-          verified_digests="$RUNNER_TEMP/aidlc-verified-release.sha256"
-          (
-            cd "$release"
-            find . -mindepth 1 -maxdepth 1 -type f -printf '%P\0' |
-              LC_ALL=C sort -z |
-              xargs -0 sha256sum
-          ) >"$verified_digests"
-          test "$(wc -l <"$verified_digests")" -eq 13
-          chmod a-w "$verified_digests"
-          chmod -R a-w "$release"
-
-          server_root="$RUNNER_TEMP/aidlc-release-server"
-          port_file="$RUNNER_TEMP/aidlc-release-server.port"
-          journey_release="$server_root/latest/download"
-          mkdir -p "$journey_release"
-          cp -R "$release/." "$journey_release/"
-          # Bun 1.4 can replace this with a static { dir } route. On the pinned
-          # Bun 1.3.14 that shape selects the framework dev server and fails.
-          bun -e '
-            import { join } from "node:path";
-            const root = process.argv[1];
-            const portFile = process.argv[2];
-            const server = Bun.serve({
-              hostname: "127.0.0.1",
-              port: 0,
-              async fetch(request) {
-                const parts = new URL(request.url).pathname
-                  .split("/")
-                  .filter(Boolean)
-                  .map(decodeURIComponent);
-                if (parts.some((part) => part === "." || part === "..")) {
-                  return new Response("bad path", { status: 400 });
-                }
-                const file = Bun.file(join(root, ...parts));
-                return await file.exists()
-                  ? new Response(file)
-                  : new Response("not found", { status: 404 });
-              },
-            });
-            await Bun.write(portFile, `${server.port}\n`);
-          ' "$server_root" "$port_file" \
-            >"$RUNNER_TEMP/aidlc-release-server.log" 2>&1 &
-          server_pid=$!
-          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
-          for _ in {1..50}; do
-            test -s "$port_file" && break
-            sleep 0.1
-          done
-          test -s "$port_file"
-          port="$(cat "$port_file")"
-          for _ in {1..50}; do
-            curl -fsS "http://127.0.0.1:$port/latest/download/version.json" >/dev/null && break
-            sleep 0.1
-          done
-
-          # Export the install locations: every subsequent command (version,
-          # config, doctor) must see the same machine root the installer
-          # used, exactly as unix-lifecycle does. Round 8 proved the
-          # alternative: with per-command env only, doctor ran against the
-          # default root and failed its two machine rows (active version
-          # marker, command pointer) while install/config survived on the
-          # executable-adjacent fallback.
-          export AIDLC_INSTALL_ROOT="$RUNNER_TEMP/aidlc-online"
-          export AIDLC_BIN_DIR="$RUNNER_TEMP/aidlc-online-bin"
-          gh_bin="$(command -v gh)"
-          # Repo-relative trust roots: on awslabs these equal the installer's
-          # built-in defaults byte-for-byte; on a fork shakedown they make the
-          # rehearsal verify the fork's own attestations instead of failing
-          # closed against upstream (proven necessary by shakedown round 6).
-          env PATH="/usr/bin:/bin" \
-            AIDLC_GH_BIN="$gh_bin" \
-            AIDLC_RELEASE_REPOSITORY="$GH_REPO" \
-            AIDLC_RELEASE_WORKFLOW="$GH_REPO/.github/workflows/release.yml" \
-            sh "$journey_release/install.sh" \
-            --release-base-url "http://127.0.0.1:$port" \
-            --quiet
-          command="$AIDLC_BIN_DIR/aidlc"
-          env PATH="/usr/bin:/bin" "$command" version
-          project="$RUNNER_TEMP/aidlc-online-project"
-          mkdir -p "$project"
-          # Coverage boundary: pre-gate lifecycle jobs scaffold and doctor all
-          # seven harnesses. This online post-attestation rehearsal stays
-          # Claude-only to prove transport, provenance, and one project journey.
-          env PATH="/usr/bin:/bin" "$command" config \
-            --project-dir "$project" --harness claude --mcp none --quiet
-          env PATH="/usr/bin:/bin" "$command" doctor \
-            --project-dir "$project" --quiet || {
-            # A failed gate must name its rows: re-run verbose for the log,
-            # then fail the job with the original verdict.
-            env PATH="/usr/bin:/bin" "$command" doctor \
-              --project-dir "$project" --verbose || true
-            exit 1
-          }
-
-      - name: Mint release-policy token
-        id: release-policy-token
-        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
-        with:
-          app-id: ${{ vars.AIDLC_RELEASE_AUTH_APP_ID }}
-          private-key: ${{ secrets.AIDLC_RELEASE_AUTH_APP_PRIVATE_KEY }}
-          owner: ${{ needs.authorize.outputs.publication_owner }}
-          repositories: |
-            ${{ github.event.repository.name }}
-            ${{ needs.authorize.outputs.publication_name }}
-          permission-administration: read
-          permission-members: read
-          permission-metadata: read
-          permission-organization-administration: read
-      - name: Re-verify release repository controls
-        shell: bash
+          gh release create "$RELEASE_TAG" build/release/* \
+            --verify-tag \
+            --title "AI-DLC ${RELEASE_TAG#v}" \
+            --generate-notes
+      - name: Verify uploaded asset inventory
         env:
-          GH_TOKEN: ${{ steps.release-policy-token.outputs.token }}
-          PUBLICATION_REPOSITORY: ${{ needs.authorize.outputs.publication_repository }}
-          RELEASE_AUTH_APP_ID: ${{ vars.AIDLC_RELEASE_AUTH_APP_ID }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
         run: |
           set -euo pipefail
-          environment="$(
-            gh api "repos/$GITHUB_REPOSITORY/environments/release"
-          )"
-          jq -e '
-            .can_admins_bypass == false and
-            .deployment_branch_policy.protected_branches == false and
-            .deployment_branch_policy.custom_branch_policies == true and
-            (
-              [.protection_rules[] | select(.type == "required_reviewers")]
-              | length
-            ) == 1 and
-            (
-              [.protection_rules[] | select(.type == "required_reviewers")][0]
-              | .prevent_self_review == true and
-                (.reviewers | length) == 1 and
-                .reviewers[0].type == "Team" and
-                .reviewers[0].reviewer.slug == "aidlc-admins"
-            )
-          ' <<<"$environment" >/dev/null
-          policies="$(
-            gh api --paginate --slurp \
-              "repos/$GITHUB_REPOSITORY/environments/release/deployment-branch-policies"
-          )"
-          jq -e '
-            ([.[].branch_policies[]] | length) == 1 and
-            [.[].branch_policies[]][0].name == "v*" and
-            [.[].branch_policies[]][0].type == "tag"
-          ' <<<"$policies" >/dev/null
-          immutable="$(
-            gh api "repos/$PUBLICATION_REPOSITORY/immutable-releases"
-          )"
-          jq -e '
-            .enabled == true and .enforced_by_owner == true
-          ' <<<"$immutable" >/dev/null
-          rulesets="$RUNNER_TEMP/aidlc-release-rulesets-final"
-          mkdir -p "$rulesets"
-          ruleset_ids="$(
-            gh api --paginate "repos/$PUBLICATION_REPOSITORY/rulesets" --jq '.[].id'
-          )"
-          while read -r ruleset_id; do
-            test -n "$ruleset_id" || continue
-            gh api "repos/$PUBLICATION_REPOSITORY/rulesets/$ruleset_id" \
-              >"$rulesets/$ruleset_id.json"
-          done <<<"$ruleset_ids"
-          collaborators="$RUNNER_TEMP/aidlc-release-collaborators-final.json"
-          organization_owners="$RUNNER_TEMP/aidlc-release-organization-owners-final.json"
-          repository="$RUNNER_TEMP/aidlc-release-repository-final.json"
-          owner="$RUNNER_TEMP/aidlc-release-owner-final.json"
-          gh api "repos/$PUBLICATION_REPOSITORY" >"$repository"
-          gh api "orgs/${PUBLICATION_REPOSITORY%%/*}" >"$owner"
-          gh api --paginate --slurp \
-            "repos/$PUBLICATION_REPOSITORY/collaborators?affiliation=all&per_page=100" \
-            >"$collaborators"
-          gh api --paginate --slurp \
-            "orgs/${PUBLICATION_REPOSITORY%%/*}/members?role=admin&per_page=100" \
-            >"$organization_owners"
-          bun scripts/verify-release.ts controls \
-            --rulesets "$rulesets" \
-            --repository "$repository" \
-            --owner "$owner" \
-            --collaborators "$collaborators" \
-            --organization-owners "$organization_owners" \
-            --source-repository "$GITHUB_REPOSITORY" \
-            --publication-repository "$PUBLICATION_REPOSITORY" \
-            --creation-actor-id "$RELEASE_AUTH_APP_ID" \
-            --creation-actor-type Integration
-      - name: Mint release publication token
-        id: release-publication-token
-        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
-        with:
-          app-id: ${{ vars.AIDLC_RELEASE_AUTH_APP_ID }}
-          private-key: ${{ secrets.AIDLC_RELEASE_AUTH_APP_PRIVATE_KEY }}
-          owner: ${{ needs.authorize.outputs.publication_owner }}
-          repositories: ${{ needs.authorize.outputs.publication_name }}
-          permission-contents: write
-      - name: Create isolated publication target
-        id: publication-target
-        shell: bash
-        env:
-          GH_TOKEN: ${{ steps.release-publication-token.outputs.token }}
-          AUTHORIZED_SHA: ${{ needs.authorize.outputs.sha }}
-          PUBLICATION_REPOSITORY: ${{ needs.authorize.outputs.publication_repository }}
-          RELEASE_TAG: ${{ needs.authorize.outputs.tag }}
-          STAGING_REF: aidlc-staging-${{ github.run_id }}-${{ github.run_attempt }}
-        run: |
-          set -euo pipefail
-          root="$RUNNER_TEMP/aidlc-publication-target"
-          mkdir -p "$root"
-          git -C "$root" init --initial-branch "$STAGING_REF"
-          git -C "$root" config user.name "AI-DLC Release"
-          git -C "$root" config user.email "2102737+apackeer@users.noreply.github.com"
-          git -C "$root" commit --allow-empty \
-            -m "Release $RELEASE_TAG from $GITHUB_REPOSITORY@$AUTHORIZED_SHA"
-          publication_sha="$(git -C "$root" rev-parse HEAD)"
-          basic="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
-          git -C "$root" \
-            -c "http.extraHeader=AUTHORIZATION: basic $basic" \
-            push "https://github.com/$PUBLICATION_REPOSITORY.git" \
-            "HEAD:refs/heads/$STAGING_REF"
-          printf 'sha=%s\nref=%s\n' "$publication_sha" "$STAGING_REF" >>"$GITHUB_OUTPUT"
-      - name: Publish and re-verify exact verified release bytes
-        shell: bash
-        env:
-          GH_TOKEN: ${{ steps.release-publication-token.outputs.token }}
-          PUBLICATION_REPOSITORY: ${{ needs.authorize.outputs.publication_repository }}
-          AUTHORIZED_SHA: ${{ needs.authorize.outputs.sha }}
-          RELEASE_TAG: ${{ needs.authorize.outputs.tag }}
-          STAGING_TAG: aidlc-staging-${{ github.run_id }}-${{ github.run_attempt }}
-        run: |
-          set -euo pipefail
-          release="$PWD/build/release"
-          (
-            cd "$release"
-            sha256sum -c "$RUNNER_TEMP/aidlc-verified-release.sha256"
-          )
-          bun scripts/verify-release.ts candidate \
-            --directory "$release" \
-            --tag "$RELEASE_TAG" \
-            --source-digest "$AUTHORIZED_SHA"
-          bun scripts/publish-release.ts \
-            --directory "$release" \
-            --tag "$RELEASE_TAG" \
-            --staging-tag "$STAGING_TAG" \
-            --target "${{ steps.publication-target.outputs.sha }}" \
-            --repository "$PUBLICATION_REPOSITORY" \
-            --changelog "$PWD/CHANGELOG.md" \
-            --expected-assets 13
-          if ! gh api --method DELETE \
-            "repos/$PUBLICATION_REPOSITORY/git/refs/heads/${{ steps.publication-target.outputs.ref }}" \
-            >/dev/null; then
-            echo "::warning title=Publication staging cleanup::The immutable release is verified, but its temporary staging ref could not be removed."
-          fi
+          find build/release -mindepth 1 -maxdepth 1 -type f -exec basename {} \; |
+            LC_ALL=C sort >"$RUNNER_TEMP/local-assets.txt"
+          gh release view "$RELEASE_TAG" --json assets --jq ".assets[].name" |
+            LC_ALL=C sort >"$RUNNER_TEMP/remote-assets.txt"
+          diff -u "$RUNNER_TEMP/local-assets.txt" "$RUNNER_TEMP/remote-assets.txt"

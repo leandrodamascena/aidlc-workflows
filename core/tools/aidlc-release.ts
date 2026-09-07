@@ -53,7 +53,6 @@ const MAX_METADATA_BYTES = 1024 * 1024;
 const PROGRESS_WIDTH = 72;
 const PROVENANCE_BUNDLE = "aidlc-release.intoto.jsonl";
 const DEFAULT_RELEASE_REPOSITORY = "awslabs/aidlc-workflows";
-const DEFAULT_PUBLICATION_REPOSITORY = "awslabs/aidlc-workflows-releases";
 
 function releaseTrust(): { repository: string; workflow: string } {
   const repository =
@@ -66,9 +65,9 @@ function releaseTrust(): { repository: string; workflow: string } {
 
 function defaultReleaseBaseUrl(): string {
   const repository =
-    process.env.AIDLC_PUBLICATION_REPOSITORY ?? DEFAULT_PUBLICATION_REPOSITORY;
+    process.env.AIDLC_RELEASE_REPOSITORY ?? DEFAULT_RELEASE_REPOSITORY;
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository)) {
-    throw new Error("AIDLC_PUBLICATION_REPOSITORY must be owner/name");
+    throw new Error("AIDLC_RELEASE_REPOSITORY must be owner/name");
   }
   return `https://github.com/${repository}/releases`;
 }

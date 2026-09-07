@@ -209,7 +209,7 @@ On macOS, Linux, or WSL:
 
 ```bash
 tmp="$(mktemp -d)"
-gh release download --repo awslabs/aidlc-workflows-releases --dir "$tmp" \
+gh release download --repo awslabs/aidlc-workflows --dir "$tmp" \
   --pattern install.sh --pattern aidlc-release.intoto.jsonl
 gh attestation verify "$tmp/install.sh" \
   --bundle "$tmp/aidlc-release.intoto.jsonl" \
@@ -230,7 +230,7 @@ On Windows PowerShell:
 ```powershell
 $download = Join-Path $env:TEMP "aidlc-install-$PID"
 New-Item -ItemType Directory -Force $download | Out-Null
-gh release download --repo awslabs/aidlc-workflows-releases --dir $download `
+gh release download --repo awslabs/aidlc-workflows --dir $download `
   --pattern install.ps1 --pattern aidlc-release.intoto.jsonl
 gh attestation verify (Join-Path $download install.ps1) `
   --bundle (Join-Path $download aidlc-release.intoto.jsonl) `
@@ -307,10 +307,9 @@ than copying a repository tree:
 tag=vX.Y.Z
 tmp="$(mktemp -d)"
 runtime_asset="aidlc-runtime-${tag#v}.tar.gz"
-publication_repo="${AIDLC_PUBLICATION_REPOSITORY:-awslabs/aidlc-workflows-releases}"
 source_repo="${AIDLC_RELEASE_REPOSITORY:-awslabs/aidlc-workflows}"
 release_workflow="${AIDLC_RELEASE_WORKFLOW:-$source_repo/.github/workflows/release.yml}"
-gh release download "$tag" --repo "$publication_repo" --dir "$tmp" \
+gh release download "$tag" --repo "$source_repo" --dir "$tmp" \
   --pattern "$runtime_asset" \
   --pattern checksums.txt \
   --pattern aidlc-release.intoto.jsonl

@@ -110,8 +110,8 @@ The authenticated bootstrap requires GitHub CLI (`gh`).
 
 ```bash
 tmp="$(mktemp -d)"
-tag="$(gh release view --repo awslabs/aidlc-workflows-releases --json tagName --jq .tagName)"
-gh release download "$tag" --repo awslabs/aidlc-workflows-releases --dir "$tmp" \
+tag="$(gh release view --repo awslabs/aidlc-workflows --json tagName --jq .tagName)"
+gh release download "$tag" --repo awslabs/aidlc-workflows --dir "$tmp" \
   --pattern install.sh --pattern aidlc-release.intoto.jsonl
 gh attestation verify "$tmp/install.sh" \
   --bundle "$tmp/aidlc-release.intoto.jsonl" \
@@ -353,7 +353,7 @@ repository's generated build directories:
 tmp="$(mktemp -d)"
 tag=vX.Y.Z
 runtime_asset="aidlc-runtime-${tag#v}.tar.gz"
-gh release download "$tag" --repo awslabs/aidlc-workflows-releases \
+gh release download "$tag" --repo awslabs/aidlc-workflows \
   --pattern "$runtime_asset" --dir "$tmp"
 tar -xzf "$tmp/$runtime_asset" -C "$tmp"
 cp -R "$tmp/runtime/<harness>/." /absolute/path/to/your-project/

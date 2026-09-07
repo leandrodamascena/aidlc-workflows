@@ -60,14 +60,10 @@ probes in disposable Alpine containers after installing the documented
 musl matrix uses
 `fail-fast: false` so both architectures report before CI stages one
 checksum-verified candidate. Unix and Windows lifecycle
-journeys consume those bytes without signing permissions. After the protected
-gate, the workflow attests them and uploads one immutable workflow artifact.
-The protected `promote` job authenticates `checksums.txt` before using it,
-validates the exact inventory, verifies every manifest asset through online
-and offline provenance paths, records the complete digest set, and exercises
-the real installer from a separate copy. Only after rechecking the original
-directory and revalidating the dedicated publication repository's zero-writer
-policy does it create the GitHub Release from those exact local bytes.
+journeys consume those bytes without signing permissions. The workflow then
+attests them and uploads one workflow artifact. `release` rechecks the tag and
+checksums, creates the GitHub Release in the source repository with
+`GITHUB_TOKEN`, and compares the uploaded asset inventory with the candidate.
 Publishing never rebuilds or repackages the candidate.
 
 `tests/harness/release-fixture.ts` builds deterministic release directories

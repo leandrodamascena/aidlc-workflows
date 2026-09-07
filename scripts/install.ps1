@@ -28,10 +28,10 @@ param(
   [Parameter()]
   [string]$ReleaseBaseUrl = $(if ($env:AIDLC_RELEASE_BASE_URL) {
     $env:AIDLC_RELEASE_BASE_URL
-  } elseif ($env:AIDLC_PUBLICATION_REPOSITORY) {
-    "https://github.com/$($env:AIDLC_PUBLICATION_REPOSITORY)/releases"
+  } elseif ($env:AIDLC_RELEASE_REPOSITORY) {
+    "https://github.com/$($env:AIDLC_RELEASE_REPOSITORY)/releases"
   } else {
-    'https://github.com/awslabs/aidlc-workflows-releases/releases'
+    'https://github.com/awslabs/aidlc-workflows/releases'
   }),
 
   [Parameter()]

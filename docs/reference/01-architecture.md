@@ -517,18 +517,14 @@ seven-target matrix in release mode), archives each
 `dist-release/<harness>/`, and emits the flat `version.json` plus
 `checksums.txt`, both installers, and binaries. The staging job re-verifies and
 uploads that candidate without signing. Unix and Windows lifecycle jobs verify
-its checksums and test it. After the release-environment gate, `publish`
-downloads the same candidate, re-verifies it, attests it, adds the exported
-`aidlc-release.intoto.jsonl` bundle, validates the complete inventory, and
-uploads one immutable `attested-release` workflow artifact. The protected
-`promote` job authenticates `checksums.txt` through online and bundled
-provenance before reading it, verifies every manifest asset, runs the online
-journey from a separate copy, rechecks the original digest set, verifies that
-the dedicated publication repository has no ordinary writer beyond trusted
-organization owners, then creates the GitHub Release there from the untouched
-publication directory. The bundle is a separate trust channel and is
-intentionally absent from `version.json` and `checksums.txt`. This pipeline does
-not implement the deferred npm channel. See
+its checksums and test it. `publish` downloads the same candidate, re-verifies
+it, attests it, adds the exported `aidlc-release.intoto.jsonl` bundle, validates
+the complete inventory, and uploads one `attested-release` workflow artifact.
+`release` rechecks the tag and checksums, creates the GitHub Release in this
+repository with `GITHUB_TOKEN`, and verifies the uploaded asset inventory. The
+bundle is a separate trust channel and is intentionally absent from
+`version.json` and `checksums.txt`. This pipeline does not implement the
+deferred npm channel. See
 [Supply-Chain Security](19-supply-chain-security.md).
 
 ## Directory Structure

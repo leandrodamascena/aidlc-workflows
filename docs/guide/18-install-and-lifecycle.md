@@ -46,8 +46,8 @@ together:
 
 ```bash
 tmp="$(mktemp -d)"
-tag="$(gh release view --repo awslabs/aidlc-workflows-releases --json tagName --jq .tagName)"
-gh release download "$tag" --repo awslabs/aidlc-workflows-releases --dir "$tmp" \
+tag="$(gh release view --repo awslabs/aidlc-workflows --json tagName --jq .tagName)"
+gh release download "$tag" --repo awslabs/aidlc-workflows --dir "$tmp" \
   --pattern install.sh --pattern aidlc-release.intoto.jsonl
 gh attestation verify "$tmp/install.sh" \
   --bundle "$tmp/aidlc-release.intoto.jsonl" \
@@ -62,8 +62,8 @@ rm -rf "$tmp"
 
 ```bash
 tmp="$(mktemp -d)"
-tag="$(gh release view --repo awslabs/aidlc-workflows-releases --json tagName --jq .tagName)"
-gh release download "$tag" --repo awslabs/aidlc-workflows-releases --dir "$tmp" \
+tag="$(gh release view --repo awslabs/aidlc-workflows --json tagName --jq .tagName)"
+gh release download "$tag" --repo awslabs/aidlc-workflows --dir "$tmp" \
   --pattern install.sh --pattern aidlc-release.intoto.jsonl
 gh attestation verify "$tmp/install.sh" \
   --bundle "$tmp/aidlc-release.intoto.jsonl" \
@@ -92,8 +92,8 @@ Malformed marker layouts are refused without changing the profile.
 ```powershell
 $download = Join-Path $env:TEMP "aidlc-install-$PID"
 New-Item -ItemType Directory -Force $download | Out-Null
-$tag = gh release view --repo awslabs/aidlc-workflows-releases --json tagName --jq .tagName
-gh release download $tag --repo awslabs/aidlc-workflows-releases --dir $download `
+$tag = gh release view --repo awslabs/aidlc-workflows --json tagName --jq .tagName
+gh release download $tag --repo awslabs/aidlc-workflows --dir $download `
   --pattern install.ps1 --pattern aidlc-release.intoto.jsonl
 gh attestation verify (Join-Path $download install.ps1) `
   --bundle (Join-Path $download aidlc-release.intoto.jsonl) `
@@ -134,27 +134,19 @@ the same binary plus all harness runtimes.
 | `--help` | Not exposed | Print Unix installer usage |
 
 `AIDLC_RELEASE_BASE_URL` and `AIDLC_CA_BUNDLE` provide installer defaults;
-explicit options win. `AIDLC_PUBLICATION_REPOSITORY` selects the GitHub
-repository used for default downloads and defaults to
-`awslabs/aidlc-workflows-releases`. `AIDLC_RELEASE_REPOSITORY` selects the
-source repository trusted by provenance verification and defaults to
-`awslabs/aidlc-workflows`.
+explicit options win. `AIDLC_RELEASE_REPOSITORY` selects both the GitHub
+repository used for default downloads and the repository trusted by provenance
+verification. It defaults to `awslabs/aidlc-workflows`.
 `AIDLC_RELEASE_WORKFLOW` selects the trusted signer workflow and defaults to
 `<AIDLC_RELEASE_REPOSITORY>/.github/workflows/release.yml`. Set these explicitly
 for a fork or mirror, together with its release base URL; changing the download
 URL alone does not change the provenance trust root. `AIDLC_GH_BIN` selects an
 explicit GitHub CLI executable for both installers.
 
-Fork release rehearsals also need a protected `release` environment restricted
-to exactly the source `main` branch and a separate publication repository under
-the same owner. That repository must grant no human push, maintain, or
-administrator authority beyond the organization's unavoidable owners, who are
-trusted publication actors, and the organization default repository permission
-must be `none` or `read`. The protected App is installed on both repositories;
-its final Contents write token is scoped only to publication. The publication
-repository has two tag rulesets over exactly `refs/tags/v*`: creation names only
-the App in `always` bypass mode, while update plus deletion has no bypass.
-Immutable releases must be enabled and owner-enforced there.
+Fork releases need no GitHub App or additional repository. The tag workflow
+publishes to the same repository with its short-lived `GITHUB_TOKEN`. Its final
+job uses the `release` environment, which can require reviewer approval before
+publication.
 
 `AIDLC_INSTALL_ROOT` and `AIDLC_BIN_DIR` override the machine and command
 locations. Those paths must be absolute on Unix. The PowerShell installer also
@@ -185,35 +177,13 @@ path traversal, absolute paths, duplicate entries, and oversized expansion.
 
 The release workflow assembles the candidate once. Staging and Unix/Windows
 lifecycle jobs verify `checksums.txt` and test those bytes without signing
-permissions. They add a job-local verifier fixture solely because the real
-attestation is created after the protected release gate; that fixture is never
-uploaded. After the gate, `publish` re-verifies the
-candidate, attests it, exports `aidlc-release.intoto.jsonl`, validates the
-complete inventory, and uploads one immutable workflow artifact. The protected
-`promote` job authenticates `checksums.txt` online and through that bundle
-before reading it, verifies every manifest asset through both provenance paths,
-records the complete digest set, and runs the real installer journey from a
-separate copy. It then rechecks the untouched publication directory, derives
-notes from the reviewed version section in `CHANGELOG.md`, and revalidates the source environment plus
-the publication repository's immutable-release setting, exact rulesets, and
-complete collaborator list plus the independently enumerated organization-owner
-list. Any write, maintain, or administrator principal who is not an organization
-owner fails the run. A publication-only App token creates an isolated
-publication commit and private draft. It refuses to run while a staging draft
-from an earlier run remains,
-verifies the new draft's complete inventory and redownloaded bytes, and re-reads
-the draft to confirm nothing moved while the bytes were read. GitHub rejects
-conditional headers on release updates, so the publish update that retargets
-the verified staging draft to the unused guarded `v*` tag is unconditional and
-is followed by a full re-verification of the published release (identity, asset
-ids, tag commit, and bytes). The publication repository has no ordinary writer,
-organization owners are explicit trusted publication actors, the workflow token
-has no access to it, and the final App token is scoped only there, so no ordinary
-source-repository writer can replace candidate bytes in the final window.
-Ordinary failures delete the staging draft this run created; a draft whose
-content changed under the publisher is retained as evidence, the log names the
-`gh release delete` command that removes it, and the next run refuses to stage
-until it is gone. The bundle is intentionally outside `version.json` and
+permissions. They add a job-local verifier fixture because the real
+attestation is created after those tests. The fixture is never uploaded.
+`publish` re-verifies the candidate, attests it, exports
+`aidlc-release.intoto.jsonl`, validates the complete inventory, and uploads one
+workflow artifact. `release` rechecks the tag and checksums, creates the GitHub
+Release in this repository with `GITHUB_TOKEN`, and compares the local and
+remote asset inventories. The bundle remains outside `version.json` and
 `checksums.txt`: those files cover the installable artifacts, while the bundle
 is its own Sigstore trust channel.
 TLS, SHA-256, and that provenance are the permanent trust model. OS
@@ -736,7 +706,7 @@ A fresh clone or CI runner installs the committed version before config:
 version=$(cat .aidlc-version)
 tag="v$version"
 tmp="$(mktemp -d)"
-gh release download "$tag" --repo awslabs/aidlc-workflows-releases --dir "$tmp" \
+gh release download "$tag" --repo awslabs/aidlc-workflows --dir "$tmp" \
   --pattern install.sh --pattern aidlc-release.intoto.jsonl
 gh attestation verify "$tmp/install.sh" \
   --bundle "$tmp/aidlc-release.intoto.jsonl" \
@@ -765,7 +735,7 @@ fails closed if the bundle is missing or does not authenticate
 `checksums.txt`:
 
 ```bash
-gh release download v2.5.45 --repo awslabs/aidlc-workflows-releases --dir ./aidlc-offline
+gh release download v2.5.45 --repo awslabs/aidlc-workflows --dir ./aidlc-offline
 ```
 
 Install on the disconnected machine:
@@ -911,10 +881,9 @@ project-root files stay together:
 tag=vX.Y.Z
 tmp="$(mktemp -d)"
 runtime_asset="aidlc-runtime-${tag#v}.tar.gz"
-publication_repo="${AIDLC_PUBLICATION_REPOSITORY:-awslabs/aidlc-workflows-releases}"
 source_repo="${AIDLC_RELEASE_REPOSITORY:-awslabs/aidlc-workflows}"
 release_workflow="${AIDLC_RELEASE_WORKFLOW:-$source_repo/.github/workflows/release.yml}"
-gh release download "$tag" --repo "$publication_repo" --dir "$tmp" \
+gh release download "$tag" --repo "$source_repo" --dir "$tmp" \
   --pattern "$runtime_asset" \
   --pattern checksums.txt \
   --pattern aidlc-release.intoto.jsonl
